@@ -36,8 +36,16 @@
 * För bättre prestanda.
 * Serialisering av aggregat som sparas undan.
 
+%%
+## Hur implementerar man det då?
+
+* Relationsdatabas.
+* Filer.
+* Eventdatabas.
+
 %%%
 ## Hur det används i Tickra
+* MsSql
 * Används framförallt för projekt och uppgifter.
 * Events serialiseras ner som json med versionsnr i databasen.
 * Snapshots i databasen.
