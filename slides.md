@@ -1,30 +1,37 @@
 # Event sourcing
 %%%
+## Agenda
+* Vad det är, definitioner.
+* Hur vi använder det i Tickra.
+* Kodexempel från Tickra.
+* Reflektioner.
+%%%
 ## Vad är event sourcing?
 
-Ett alternativ till vanliga C(R)UD-operationer direkt mot databasen.
+* Ett alternativ till vanliga CRUD-operationer direkt mot databasen.
 
-En serie av händelser som tillsammans beskriver ett tillstånd.
+* En serie av händelser som tillsammans beskriver ett tillstånd.
 
-Beskriver också hur vi tog oss till det tillståndet.
+* Beskriver också hur vi tog oss till det tillståndet.
+
+### Istället för att uppdatera en hel databasrad.
 
 %%
 ## Definitioner
 
-
-#### Ett event är 
+### Ett event är 
 * En effekt av ett kommando (t.ex. ett http-anrop)
 * Påverkar nuvarande state av ett aggregat.
 * Immutable
+* Innehåller information om vad som har ändrats.
 
 %%
-## Definitioner fortsättning
-#### Ett aggregat är
+### Ett aggregat är
 * Subjektet som påverkas av ett kommando.
 * Applicerar affärslogik utifrån kommandot och det state aggregatet själv innehåller.
 * Aggregatet genererar ett event som den applicerar på sig själv.
-
-## Snapshot
+%%
+### Ett Snapshot är
 * En ögonblicksbild av ett aggregat.
 * För bättre prestanda.
 * Serialisering av aggregat som sparas undan.
@@ -34,6 +41,7 @@ Beskriver också hur vi tog oss till det tillståndet.
 * Används framförallt för projekt och uppgifter.
 * Events serialiseras ner som json med versionsnr i databasen.
 * Snapshots i databasen.
+* Snapshots går alltid att ta bort.
 %%
 ## Eventtabell i Tickra
 
@@ -43,10 +51,18 @@ AggregateId | Event | Data | Version
 6bd18c | ProjectTaskEstimateSet | {"ProjectTaskId":..} | 2
 6bd18c | ProjectTaskEstimateSet | {"ProjectTaskId":..} | 3
 
+%%
+
+## Flöde för en uppdatering CRUD
+* En vymodell skickas in.
+* Vi läser upp databasmodellen.
+* Uppdaterar fält i databasmodellen från vymodell.
+* Sparar ner databasmodellen.
 
 %%
-## Implementationsdetaljer
-* Ett kommando skickas in
+
+## Flöde för en uppdatering Tickra
+* Ett kommando skickas in.
 * Vi läser upp aggregatet:
   * Från snapshot 
   * Genom att applicera alla event på ett aggregat.
@@ -55,12 +71,14 @@ AggregateId | Event | Data | Version
   * Lyssnare är t.ex. projektioner som behöver uppdateras.
 * Event och snapshot sparas ner i databasen.
   * OptimisticConcurrencyException
+
 %%
+
 ![test](event-sourcing.png)
 
 %%%
 
-## Skapa en uppgift i Tickra
+### Skapa en uppgift i Tickra
 ```cs
 public class ProjectTask : AggregateRoot<ProjectTask.State>
 {
@@ -86,16 +104,16 @@ public class ProjectTask : AggregateRoot<ProjectTask.State>
 }
 ```
 %%
-## Sätta uppskattad tidåtgång
+### Sätta uppskattad tidåtgång
 ```cs
 // Public method is called from controller or similar. 
-public void SetEstimate(IProjectTaskService projectTaskService, ProjectState projectState, int? estimate)
+public void SetEstimate(ProjectState projectState, int? estimate..)
 {
     ValidateProjectState(projectState, Snapshot.ProjectTaskId);
 
     if (Snapshot.Estimate != estimate)
     {
-        ApplyChange(new ProjectTaskEstimateSet(Snapshot.ProjectTaskId, Snapshot.ProjectId, estimate, DateTimeOffset.Now));
+        ApplyChange(new ProjectTaskEstimateSet(Snapshot.ProjectTaskId, estimate..));
     }
 }
 
@@ -107,7 +125,7 @@ private void Apply(ProjectTaskEstimateSet @event)
 }
 ```
 %%
-## Projektioner
+### Projektioner
 ```cs
 public class ProjectTaskEstimateSet : UserIssuedEvent
 {
@@ -115,7 +133,7 @@ public class ProjectTaskEstimateSet : UserIssuedEvent
     public readonly ProjectId ProjectId;
     public readonly int? Estimate;
 
-    public ProjectTaskEstimateSet(ProjectTaskId projectTaskId, ProjectId projectId, int? estimate, DateTimeOffset timeStamp): base(timeStamp)
+    public ProjectTaskEstimateSet(int? estimate, DateTimeOffset timeStamp..): base(timeStamp)
     {
         ProjectTaskId = projectTaskId;
         ProjectId = projectId;
@@ -130,7 +148,7 @@ public async Task HandleAsync(ProjectTaskEstimateSet @event)
 }
 ```
 %%
-## Läsa upp ett aggregat
+### Läsa upp ett aggregat
 ```cs
 public async Task<TEventSource> GetAsync(Guid aggregateId, int? version = null)
 {
@@ -160,78 +178,93 @@ public async Task<TEventSource> GetAsync(Guid aggregateId, int? version = null)
 }
 ```
 %%
-## Spara ner ett aggregat
+### Spara ner ett aggregat
 ```cs
 public async Task SaveAsync(TEventSource aggregate, int? expectedVersion)
 {
+    // Läser upp alla events som har applicerats på aggregatet.
     var changes = aggregate.GetChanges();
-
     foreach (var change in changes)
     {
         var userIssuedEvent = change as UserIssuedEvent;
         if (userIssuedEvent != null)
         {
-            if (_principal == null)
-            {
-                throw new InvalidOperationException("A change that requires a userId cannot be saved if no userId is available!");
-            }
             userIssuedEvent.IssuedByUserId = _principal.Identity.GetUserId<long>();
         }
     }
 
-    while (true)
+    try
     {
-        try
-        {
-            await _eventStore.AppendStreamAsync(aggregate.Id, changes, aggregate.Version);
-            break;
-        }
-        catch (OptimisticConcurrencyException ex)
-        {
-            throw ex;
-            //aggregate.ResolveConflicts(ex.CommittedEvents);
-        }
+        // Spara ner events och kolla om aggregatets version i databasen har ändrats.
+        await _eventStore.AppendStreamAsync(aggregate.Id, changes, aggregate.Version);
+        break;
     }
-
+    catch (OptimisticConcurrencyException ex)
+    {
+        throw ex;
+        //aggregate.ResolveConflicts(ex.CommittedEvents);
+    }
+    
+    // Uppdatera snapshot.
     var snapshot = aggregate.GenerateSnapshot();
     await _snapshotStore.SaveSnapshotAsync(snapshot);
-
+    
+    // Broadcasta alla events.
     foreach (var @event in changes)
     {
         await _eventBus.PublishAsync(@event);
     }
-    aggregate.ClearChanges();
 }
 ```
 %%
-## Lösning av OptimisticConcurrencyException
+### OptimisticConcurrencyException
 
 Vi förväntade oss att aggregatet skulle ha version 2 men hade version 3.
 
 Exceptionet innehåller event med version 3.
 
+Användaren får försöka igen.
+
+#### Lösningsförslag
+
 Eventuellt möjligt att lösa konflikten med informationen i version 3.
 
-Annars returnerar vi ett fel till användaren.
+Kör endast ett kommando åt gången.
+%%
+### Storlek på aggregat
+Lagom små.
 
-Skulle kunna lösas genom att köra ett event åt gången. 
+Minskar risken för OptimisticConcurrencyException.
 %%%
 ## Vad är det bra för?
 
 * Logiken på ett ställe - i aggregatet.
 * Lättare att debugga.
+* Lättare att testa.
 * Auditlog.
 * Mer information som man kanske inte vet om man behöver.
 * Flera olika projektioner utifrån multipla aggregat.
-* Påverka andra delar som WebJob. 
+  * Slipper joins
+* Påverka andra delar som WebJob.
+
+%%%
+## Vad är nackdelarna?
+
+* Mer diskutrymme.
+* Ökad komplexitet.
+  * ProcessManagers.
+  * Ändring av events.
+
 %%%
 ## När ska man använda det?
 
-Komplexa entiteter med mycket affärslogik.
+* Komplexa entiteter med mycket affärslogik.
 
-Eller för ökad spårbarhet.
+* Ökad spårbarhet.
 
-Ger onödig overhead för simpla CRUD'ar.
+* Läsprestanda.
+
+#### Ger onödig overhead för simpla CRUD'ar.
 
 %%%
 ## Färdiga alternativ med .NET api
