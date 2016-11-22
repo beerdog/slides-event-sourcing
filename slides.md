@@ -1,5 +1,5 @@
 # Event sourcing
----
+%%%
 ## Vad är event sourcing?
 
 Ett alternativ till vanliga C(R)UD-operationer direkt mot databasen.
@@ -8,7 +8,7 @@ En serie av händelser som tillsammans beskriver ett tillstånd.
 
 Beskriver också hur vi tog oss till det tillståndet.
 
---
+%%
 ## Definitioner
 
 
@@ -17,26 +17,34 @@ Beskriver också hur vi tog oss till det tillståndet.
 * Påverkar nuvarande state av ett aggregat.
 * Immutable
 
---
+%%
 ## Definitioner fortsättning
 #### Ett aggregat är
 * Subjektet som påverkas av ett kommando.
-* Applicerar affärslogik utifrån kommandot och det state agregatet själv innehåller.
+* Applicerar affärslogik utifrån kommandot och det state aggregatet själv innehåller.
 * Aggregatet genererar ett event som den applicerar på sig själv.
 
+## Snapshot
+* En ögonblicksbild av ett aggregat.
+* För bättre prestanda.
+* Serialisering av aggregat som sparas undan.
 
-
-
----
+%%%
 ## Hur det används i Tickra
 * Används framförallt för projekt och uppgifter.
-* Snapshots i databasen.
 * Events serialiseras ner som json med versionsnr i databasen.
---
-## Fixa bild som beskriver föregående slide
+* Snapshots i databasen.
+%%
+## Eventtabell i Tickra
+
+AggregateId | Event | Data | Version
+--- | --- | ---
+6bd18c | Tickra.Events.ProjectTaskCreated | {"TimeStamp":..} | 1
+6bd18c | ProjectTaskEstimateSet | {"ProjectTaskId":..} | 2
+6bd18c | ProjectTaskEstimateSet | {"ProjectTaskId":..} | 3
 
 
---
+%%
 ## Implementationsdetaljer
 * Ett kommando skickas in
 * Vi läser upp aggregatet:
@@ -47,10 +55,10 @@ Beskriver också hur vi tog oss till det tillståndet.
   * Lyssnare är t.ex. projektioner som behöver uppdateras.
 * Event och snapshot sparas ner i databasen.
   * OptimisticConcurrencyException
---
-## Fixa bild som beskriver föregående slide
+%%
+![test](event-sourcing.png)
 
----
+%%%
 
 ## Skapa en uppgift i Tickra
 ```cs
@@ -77,7 +85,7 @@ public class ProjectTask : AggregateRoot<ProjectTask.State>
     }
 }
 ```
---
+%%
 ## Sätta uppskattad tidåtgång
 ```cs
 // Public method is called from controller or similar. 
@@ -98,7 +106,7 @@ private void Apply(ProjectTaskEstimateSet @event)
     Snapshot.IsOverdrawn = false;
 }
 ```
---
+%%
 ## Projektioner
 ```cs
 public class ProjectTaskEstimateSet : UserIssuedEvent
@@ -121,7 +129,7 @@ public async Task HandleAsync(ProjectTaskEstimateSet @event)
     await UpdateProgressWithEstimateOrStatus(@event.ProjectId, @event.ProjectTaskId, @event.Estimate, null);
 }
 ```
---
+%%
 ## Läsa upp ett aggregat
 ```cs
 public async Task<TEventSource> GetAsync(Guid aggregateId, int? version = null)
@@ -151,7 +159,7 @@ public async Task<TEventSource> GetAsync(Guid aggregateId, int? version = null)
     return aggregate;
 }
 ```
---
+%%
 ## Spara ner ett aggregat
 ```cs
 public async Task SaveAsync(TEventSource aggregate, int? expectedVersion)
@@ -195,7 +203,7 @@ public async Task SaveAsync(TEventSource aggregate, int? expectedVersion)
     aggregate.ClearChanges();
 }
 ```
---
+%%
 ## Lösning av OptimisticConcurrencyException
 
 Vi förväntade oss att aggregatet skulle ha version 2 men hade version 3.
@@ -207,7 +215,7 @@ Eventuellt möjligt att lösa konflikten med informationen i version 3.
 Annars returnerar vi ett fel till användaren.
 
 Skulle kunna lösas genom att köra ett event åt gången. 
----
+%%%
 ## Vad är det bra för?
 
 * Logiken på ett ställe - i aggregatet.
@@ -216,7 +224,7 @@ Skulle kunna lösas genom att köra ett event åt gången.
 * Mer information som man kanske inte vet om man behöver.
 * Flera olika projektioner utifrån multipla aggregat.
 * Påverka andra delar som WebJob. 
----
+%%%
 ## När ska man använda det?
 
 Komplexa entiteter med mycket affärslogik.
@@ -225,10 +233,10 @@ Eller för ökad spårbarhet.
 
 Ger onödig overhead för simpla CRUD'ar.
 
----
+%%%
 ## Färdiga alternativ med .NET api
 * Eventstore
 * Marten - Postgressql
 * Streamstone - Azure Table Storage
----
+%%%
 ## THE END
