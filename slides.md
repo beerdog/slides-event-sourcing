@@ -20,23 +20,28 @@
 ## Definitioner
 
 ### Ett event är 
-* En effekt av ett kommando (t.ex. ett http-anrop)
+* En effekt av ett kommando.
 * Påverkar nuvarande state av ett aggregat.
-* Immutable
+* Immutable.
 * Innehåller information om vad som har ändrats.
 
 %%
+
 ### Ett aggregat är
 * Subjektet som påverkas av ett kommando.
 * Applicerar affärslogik utifrån kommandot och det state aggregatet själv innehåller.
 * Aggregatet genererar ett event som den applicerar på sig själv.
+* Exempelvis en uppgift i Tickra.
+
 %%
+
 ### Ett Snapshot är
 * En ögonblicksbild av ett aggregat.
 * För bättre prestanda.
 * Serialisering av aggregat som sparas undan.
 
 %%
+
 ## Hur implementerar man det då?
 
 * Relationsdatabas.
@@ -44,14 +49,16 @@
 * Eventdatabas.
 
 %%%
+
 ## Hur det används i Tickra
 * MsSql
 * Används framförallt för projekt och uppgifter.
 * Events serialiseras ner som json med versionsnr i databasen.
 * Snapshots i databasen.
 * Snapshots går alltid att ta bort.
+
 %%
-## Eventtabell i Tickra
+### Eventtabell i Tickra
 
 AggregateId | Event | Data | Version
 --- | --- | ---
@@ -61,7 +68,7 @@ AggregateId | Event | Data | Version
 
 %%
 
-## Flöde för en uppdatering CRUD
+### Flöde för en uppdatering - CRUD
 * En vymodell skickas in.
 * Vi läser upp databasmodellen.
 * Uppdaterar fält i databasmodellen från vymodell.
@@ -69,7 +76,7 @@ AggregateId | Event | Data | Version
 
 %%
 
-## Flöde för en uppdatering Tickra
+### Flöde för en uppdatering - Tickra
 * Ett kommando skickas in.
 * Vi läser upp aggregatet:
   * Från snapshot 
@@ -85,6 +92,11 @@ AggregateId | Event | Data | Version
 ![test](event-sourcing.png)
 
 %%%
+### Kodexempel
+
+#### Underlättar för vissa.
+
+%%
 
 ### Skapa en uppgift i Tickra
 ```cs
@@ -96,17 +108,16 @@ public class ProjectTask : AggregateRoot<ProjectTask.State>
         public string Name { get; set; }
     }
     // Public method is called from controller or similar. 
-    public ProjectTask(ProjectTaskId projectTaskId, projectId....)
+    public ProjectTask(ProjectTaskId projectTaskId, string name....)
     {
         ValidateProjectState(projectState, projectTaskId);
         ValidateDetails(name, description);
-        ApplyChange(new ProjectTaskCreated(projectTaskId, projectId...));
+        ApplyChange(new ProjectTaskCreated(projectTaskId, name...));
     }
     // Apply the event to the state / snapshot
     private void Apply(ProjectTaskCreated @event)
     {
         Snapshot.ProjectTaskId = @event.ProjectTaskId;
-        Snapshot.ProjectId = @event.ProjectId;
         Snapshot.Name = @event.TaskName;
     }
 }
@@ -117,8 +128,10 @@ public class ProjectTask : AggregateRoot<ProjectTask.State>
 // Public method is called from controller or similar. 
 public void SetEstimate(ProjectState projectState, int? estimate..)
 {
+    // Is the task in the project, is the project archived.
     ValidateProjectState(projectState, Snapshot.ProjectTaskId);
 
+    // Only generate an event if we have to.
     if (Snapshot.Estimate != estimate)
     {
         ApplyChange(new ProjectTaskEstimateSet(Snapshot.ProjectTaskId, estimate..));
@@ -129,10 +142,18 @@ public void SetEstimate(ProjectState projectState, int? estimate..)
 private void Apply(ProjectTaskEstimateSet @event)
 {
     Snapshot.Estimate = @event.Estimate;
-    Snapshot.IsOverdrawn = false;
 }
 ```
 %%
+
+### Projektioner
+* Listningar av uppgifter.
+* Uppgifters detaljvyer.
+* Platta tabeller med all information utstämplad.
+* Hur hålls de uppdaterade?
+
+%%
+
 ### Projektioner
 ```cs
 public class ProjectTaskEstimateSet : UserIssuedEvent
@@ -155,9 +176,20 @@ public async Task HandleAsync(ProjectTaskEstimateSet @event)
     await UpdateProgressWithEstimateOrStatus(@event.ProjectId, @event.ProjectTaskId, @event.Estimate, null);
 }
 ```
+
 %%
+
+### Projektioner alternativ
+* Uppdateras inom varje request.
+* "Eventual concistency"
+  * Uppdatera efter requesten.
+  * Måste pusha ut ändringarna till klienten.
+
+%%
+
 ### Läsa upp ett aggregat
 ```cs
+// Möjligt att läsa upp en specifik version.
 public async Task<TEventSource> GetAsync(Guid aggregateId, int? version = null)
 {
     var aggregate = new TEventSource();
@@ -166,7 +198,7 @@ public async Task<TEventSource> GetAsync(Guid aggregateId, int? version = null)
     EventStream eventStream = null;
     if (snapshot != null)
     {
-        // Har vi ett snapshot så sätter populerar vi aggregatet från det.
+        // Har vi ett snapshot så populerar vi aggregatet från det.
         aggregate.LoadFromSnapshot(snapshot);
         // Läser upp eventuella events med högre version än vårat snapshot.
         eventStream = await _eventStore.LoadEventStreamAsync(aggregateId, snapshot.Version, version);
@@ -239,10 +271,14 @@ Eventuellt möjligt att lösa konflikten med informationen i version 3.
 
 Kör endast ett kommando åt gången.
 %%
-### Storlek på aggregat
+### Storlek på aggregat och events
+
 Lagom små.
 
 Minskar risken för OptimisticConcurrencyException.
+
+I Tickra skickas multipla kommandon när en uppgift uppdateras.
+
 %%%
 ## Vad är det bra för?
 
@@ -255,7 +291,7 @@ Minskar risken för OptimisticConcurrencyException.
   * Slipper joins
 * Påverka andra delar som WebJob.
 
-%%%
+%%
 ## Vad är nackdelarna?
 
 * Mer diskutrymme.
@@ -263,16 +299,18 @@ Minskar risken för OptimisticConcurrencyException.
   * ProcessManagers.
   * Ändring av events.
 
-%%%
+%%
 ## När ska man använda det?
 
 * Komplexa entiteter med mycket affärslogik.
-
 * Ökad spårbarhet.
-
 * Läsprestanda.
 
 #### Ger onödig overhead för simpla CRUD'ar.
+%%
+## Aggregat
+* Går att använda utan event-sourcing.
+* Ger flera fördelar utan nackdelar.
 
 %%%
 ## Färdiga alternativ med .NET api
